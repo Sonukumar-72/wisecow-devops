@@ -10,69 +10,59 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout repository
+      # 1. Checkout code
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2. Docker Hub login
-      - name: Docker Hub Login
+      # 2. Log in to Docker Hub
+      - name: Log in to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 3. Build Docker image
+      # 3. Build and tag Docker image
       - name: Build Docker image
         run: |
           IMAGE_TAG=${GITHUB_SHA::8}
-          echo "Building Docker image with tags: latest and $IMAGE_TAG"
-          docker build -t sonukumar2003/wisecow:$IMAGE_TAG .
-          docker tag sonukumar2003/wisecow:$IMAGE_TAG sonukumar2003/wisecow:latest
+          docker build -t sonukumar2003/wisecow:latest .
+          docker tag sonukumar2003/wisecow:latest sonukumar2003/wisecow:$IMAGE_TAG
 
       # 4. Push Docker image
       - name: Push Docker image
         run: |
           IMAGE_TAG=${GITHUB_SHA::8}
-          docker push sonukumar2003/wisecow:$IMAGE_TAG
           docker push sonukumar2003/wisecow:latest
+          docker push sonukumar2003/wisecow:$IMAGE_TAG
 
-      # 5. Set up kubectl
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'v1.28.0'
-
-      # 6. Configure kubeconfig
+      # 5. Configure kubeconfig
       - name: Configure kubeconfig
         run: |
+          mkdir -p $HOME/.kube
           echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > $HOME/.kube/config
 
-      # 7. Deploy dynamically
-      - name: Dynamic Deployment to Kubernetes
+      # 6. Smart Kubernetes deployment
+      - name: Deploy to Kubernetes
         run: |
+          NAMESPACE=wisecow
+          DEPLOYMENT=wisecow-deployment
           IMAGE_TAG=${GITHUB_SHA::8}
-          echo "Deploying image: sonukumar2003/wisecow:$IMAGE_TAG"
 
-          # Update image dynamically in deployment manifest
-          kubectl set image deployment/wisecow-deployment wisecow=sonukumar2003/wisecow:$IMAGE_TAG --record
+          # Create namespace if it doesn't exist
+          kubectl get namespace $NAMESPACE || kubectl create namespace $NAMESPACE
 
-          # Wait for rollout
-          if ! kubectl rollout status deployment/wisecow-deployment --timeout=120s; then
-            echo "Rollout failed! Rolling back to previous version..."
-            kubectl rollout undo deployment/wisecow-deployment
-            exit 1
+          # Check if deployment exists
+          if kubectl get deployment $DEPLOYMENT -n $NAMESPACE; then
+            echo "Updating existing deployment..."
+            kubectl set image deployment/$DEPLOYMENT wisecow=sonukumar2003/wisecow:$IMAGE_TAG -n $NAMESPACE
+          else
+            echo "Creating new deployment..."
+            kubectl apply -f k8s-manifests/ -n $NAMESPACE
           fi
 
-      # 8. Apply Ingress dynamically
-      - name: Apply Ingress
-        run: |
-          # If your ingress manifest references the image, dynamically update it
-          kubectl apply -f k8s-manifests/ingress.yaml
-          echo "Ingress updated. Your app is live at the configured URL."
-
-      # 9. Verify deployment
-      - name: Show cluster resources
-        run: |
-          kubectl get pods -o wide
-          kubectl get svc
-          kubectl get ingress
+          # Wait for rollout and rollback if failed
+          if ! kubectl rollout status deployment/$DEPLOYMENT -n $NAMESPACE --timeout=120s; then
+            echo "Rollout failed! Rolling back..."
+            kubectl rollout undo deployment/$DEPLOYMENT -n $NAMESPACE
+            exit 1
+          fi
