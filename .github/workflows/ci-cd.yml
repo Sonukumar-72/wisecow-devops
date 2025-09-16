@@ -1,61 +1,78 @@
-
 name: CI/CD Pipeline - Wisecow
 
 on:
   push:
     branches:
-      - main        # Production branch
-      - develop     # Staging/CI branch
+      - main
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout code
-      - name: Checkout code
+      # 1. Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2. Set up Docker Buildx
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      # 3. Build Docker image
-      - name: Build Docker image
-        run: |
-          IMAGE_TAG=${GITHUB_SHA::8}  # Short SHA
-          docker build -t wisecow:$IMAGE_TAG .
-          docker tag wisecow:$IMAGE_TAG wisecow:latest
-
-      # 4. Log in to Docker Hub
-      - name: Docker login
+      # 2. Docker Hub login
+      - name: Docker Hub Login
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 5. Push image to Docker Hub
+      # 3. Build Docker image
+      - name: Build Docker image
+        run: |
+          IMAGE_TAG=${GITHUB_SHA::8}
+          echo "Building Docker image with tags: latest and $IMAGE_TAG"
+          docker build -t sonukumar2003/wisecow:$IMAGE_TAG .
+          docker tag sonukumar2003/wisecow:$IMAGE_TAG sonukumar2003/wisecow:latest
+
+      # 4. Push Docker image
       - name: Push Docker image
         run: |
           IMAGE_TAG=${GITHUB_SHA::8}
-          docker push wisecow:latest
-          docker push wisecow:$IMAGE_TAG
+          docker push sonukumar2003/wisecow:$IMAGE_TAG
+          docker push sonukumar2003/wisecow:latest
 
-      # 6. Deploy to Kubernetes
-      - name: Deploy to Kubernetes
-        env:
-          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}  # base64 encoded kubeconfig
-          IMAGE_TAG: ${{ github.sha }}
+      # 5. Set up kubectl
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      # 6. Configure kubeconfig
+      - name: Configure kubeconfig
         run: |
-          mkdir -p $HOME/.kube
-          echo "$KUBE_CONFIG_DATA" | base64 -d > $HOME/.kube/config
+          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > $HOME/.kube/config
 
-          # Apply manifests
-          kubectl apply -f k8s-manifests/
+      # 7. Deploy dynamically
+      - name: Dynamic Deployment to Kubernetes
+        run: |
+          IMAGE_TAG=${GITHUB_SHA::8}
+          echo "Deploying image: sonukumar2003/wisecow:$IMAGE_TAG"
 
-          # Update deployment image with rollback if failed
-          if ! kubectl set image deployment/wisecow-deployment wisecow=wisecow:$IMAGE_TAG --record || ! kubectl rollout status deployment/wisecow-deployment; then
-            echo "Deployment failed! Rolling back..."
+          # Update image dynamically in deployment manifest
+          kubectl set image deployment/wisecow-deployment wisecow=sonukumar2003/wisecow:$IMAGE_TAG --record
+
+          # Wait for rollout
+          if ! kubectl rollout status deployment/wisecow-deployment --timeout=120s; then
+            echo "Rollout failed! Rolling back to previous version..."
             kubectl rollout undo deployment/wisecow-deployment
             exit 1
           fi
+
+      # 8. Apply Ingress dynamically
+      - name: Apply Ingress
+        run: |
+          # If your ingress manifest references the image, dynamically update it
+          kubectl apply -f k8s-manifests/ingress.yaml
+          echo "Ingress updated. Your app is live at the configured URL."
+
+      # 9. Verify deployment
+      - name: Show cluster resources
+        run: |
+          kubectl get pods -o wide
+          kubectl get svc
+          kubectl get ingress
