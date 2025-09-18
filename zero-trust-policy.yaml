@@ -1,0 +1,17 @@
+apiVersion: security.kubearmor.com/v1
+kind: KubeArmorPolicy
+metadata:
+  name: zero-trust-deny-all
+  namespace: default
+policy:
+  selector:
+    matchLabels: {}   # Apply to all pods in the namespace
+  process:
+    matchPaths:
+      - path: "/*"
+        action: Block
+  file:
+    matchPaths:
+      - path: "/*"
+        action: Block
+
