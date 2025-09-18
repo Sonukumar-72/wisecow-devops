@@ -3,7 +3,6 @@
 This repository showcases my DevOps skills through multiple problem statements, including **containerization, Kubernetes deployment, CI/CD pipelines, monitoring/automation scripts, and zero-trust security policies**. 
 
 ## 📸 Screenshots
-## 📸 Screenshots
 ![localhost](./assets/localhost.png)
 ![command](./assets/command.png)
 ![docker](./assets/docker.png)
