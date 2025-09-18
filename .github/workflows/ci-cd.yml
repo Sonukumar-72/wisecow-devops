@@ -6,63 +6,52 @@ on:
       - main
 
 jobs:
-  build-and-deploy:
+  build-deploy:
     runs-on: ubuntu-latest
 
     steps:
       # 1. Checkout code
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2. Log in to Docker Hub
+      # 2. Set up Docker Buildx (for multi-platform images if needed)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      # 3. Log in to Docker Hub
       - name: Log in to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 3. Build and tag Docker image
+      # 4. Build Docker image
       - name: Build Docker image
         run: |
-          IMAGE_TAG=${GITHUB_SHA::8}
           docker build -t sonukumar2003/wisecow:latest .
-          docker tag sonukumar2003/wisecow:latest sonukumar2003/wisecow:$IMAGE_TAG
-
-      # 4. Push Docker image
+          docker tag sonukumar2003/wisecow:latest sonukumar2003/wisecow:${{ github.sha }}
+      # 5. Push Docker image
       - name: Push Docker image
         run: |
-          IMAGE_TAG=${GITHUB_SHA::8}
           docker push sonukumar2003/wisecow:latest
-          docker push sonukumar2003/wisecow:$IMAGE_TAG
-
-      # 5. Configure kubeconfig
-      - name: Configure kubeconfig
+          docker push sonukumar2003/wisecow:${{ github.sha }}
+      # 6. Install kind (Kubernetes in Docker)
+      - name: Install kind
         run: |
-          mkdir -p $HOME/.kube
-          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > $HOME/.kube/config
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.26.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+      # 7. Create a local Kubernetes cluster
+      - name: Create kind cluster
+        run: kind create cluster --name wisecow-cluster
 
-      # 6. Smart Kubernetes deployment
+      # 8. Verify kubectl
+      - name: Verify cluster
+        run: kubectl get nodes
+
+      # 9. Deploy app to Kubernetes
       - name: Deploy to Kubernetes
         run: |
-          NAMESPACE=wisecow
-          DEPLOYMENT=wisecow-deployment
-          IMAGE_TAG=${GITHUB_SHA::8}
-
-          # Create namespace if it doesn't exist
-          kubectl get namespace $NAMESPACE || kubectl create namespace $NAMESPACE
-
-          # Check if deployment exists
-          if kubectl get deployment $DEPLOYMENT -n $NAMESPACE; then
-            echo "Updating existing deployment..."
-            kubectl set image deployment/$DEPLOYMENT wisecow=sonukumar2003/wisecow:$IMAGE_TAG -n $NAMESPACE
-          else
-            echo "Creating new deployment..."
-            kubectl apply -f k8s-manifests/ -n $NAMESPACE
-          fi
-
-          # Wait for rollout and rollback if failed
-          if ! kubectl rollout status deployment/$DEPLOYMENT -n $NAMESPACE --timeout=120s; then
-            echo "Rollout failed! Rolling back..."
-            kubectl rollout undo deployment/$DEPLOYMENT -n $NAMESPACE
-            exit 1
-          fi
+          kubectl apply -f k8s-manifests/
+          kubectl set image deployment/wisecow-deployment wisecow=sonukumar2003/wisecow:${{ github.sha }}
+          kubectl rollout status deployment/wisecow-deployment
